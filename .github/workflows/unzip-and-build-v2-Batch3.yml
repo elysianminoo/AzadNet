@@ -19,35 +19,71 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
-          cache: gradle
+
+      - name: Extract source if nested in ZIP
+        run: |
+          set -e
+          echo "=== Repository contents ==="
+          ls -la
+
+          # اگر سورس داخل یک ZIP باشد، آن را باز کن
+          if [ -f AzadNet_Source.zip ]; then
+            echo "Found AzadNet_Source.zip – extracting..."
+            unzip -o AzadNet_Source.zip
+          fi
+          if [ -f AzadNet-Source-v1.0.0.zip ]; then
+            echo "Found AzadNet-Source-v1.0.0.zip – extracting..."
+            unzip -o AzadNet-Source-v1.0.0.zip
+          fi
+
+          # اگر پوشه AzadNet وجود دارد، محتوایش را به ریشه بیاور
+          if [ -d AzadNet ] && [ ! -f app/build.gradle.kts ] && [ ! -f app/build.gradle ]; then
+            echo "Moving AzadNet/* to repository root..."
+            shopt -s dotglob
+            mv AzadNet/* .
+            rmdir AzadNet 2>/dev/null || true
+          fi
+
+          echo "=== After extract ==="
+          ls -la
+          echo "Looking for Gradle files:"
+          find . -name "build.gradle*" -o -name "settings.gradle*" -o -name "gradlew" | head -20
 
       - name: Setup Android SDK
         run: |
-          echo "Using preinstalled Android SDK on runner"
-          echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${ANDROID_HOME}"
           yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" || sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-          echo "Android SDK ready"
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" || \
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
-      - name: Fix Gradle Wrapper
+      - name: Ensure Gradle Wrapper
         run: |
           mkdir -p gradle/wrapper
-          printf '%s\n' \
-            'distributionBase=GRADLE_USER_HOME' \
-            'distributionPath=wrapper/dists' \
-            'distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip' \
-            'networkTimeout=10000' \
-            'validateDistributionUrl=true' \
-            'zipStoreBase=GRADLE_USER_HOME' \
-            'zipStorePath=wrapper/dists' \
-            > gradle/wrapper/gradle-wrapper.properties
+          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
+            printf '%s\n' \
+              'distributionBase=GRADLE_USER_HOME' \
+              'distributionPath=wrapper/dists' \
+              'distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip' \
+              'networkTimeout=10000' \
+              'validateDistributionUrl=true' \
+              'zipStoreBase=GRADLE_USER_HOME' \
+              'zipStorePath=wrapper/dists' \
+              > gradle/wrapper/gradle-wrapper.properties
+          fi
           if [ -f ./gradlew ]; then
             chmod +x ./gradlew
           fi
 
       - name: Build Debug APK
         run: |
+          set -e
+          if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
+            echo "ERROR: No Android project found at repository root."
+            echo "Please extract the source ZIP into the repo root (app/, build.gradle.kts, ...)."
+            ls -la
+            exit 1
+          fi
+
           if [ -x ./gradlew ]; then
             ./gradlew assembleDebug --stacktrace --no-daemon
           else
@@ -55,6 +91,9 @@ jobs:
             unzip -q /tmp/gradle.zip -d /tmp
             /tmp/gradle-8.7/bin/gradle assembleDebug --stacktrace --no-daemon
           fi
+
+          echo "=== APK outputs ==="
+          find app/build/outputs -name "*.apk" 2>/dev/null || echo "No APK found yet"
 
       - name: Upload APK Artifact
         if: always()
@@ -70,7 +109,11 @@ jobs:
       - name: Create Source ZIP
         if: always()
         run: |
-          zip -r AzadNet-Source-v1.0.0.zip . -x "*.git*" -x "*build*" -x "*local.properties*" -x "*.apk" -x "*artifacts*" -x "*.idea*" -x "*gradle/caches*" -x "*gradle/wrapper/dists*"
+          zip -r AzadNet-Source-v1.0.0.zip . \
+            -x "*.git*" -x "*build*" -x "*local.properties*" \
+            -x "*.apk" -x "*artifacts*" -x "*.idea*" \
+            -x "*gradle/caches*" -x "*gradle/wrapper/dists*" \
+            -x "AzadNet_Source.zip" -x "AzadNet-Source-v1.0.0.zip"
 
       - name: Upload Source ZIP
         if: always()
