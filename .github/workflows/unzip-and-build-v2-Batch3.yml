@@ -19,25 +19,77 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # استفاده از روش دستی به‌جای اکشن مشکل‌دار (پکیج tools حذف شده)
+      - name: Setup Android SDK (manual)
+        run: |
+          export ANDROID_HOME=${ANDROID_HOME:-$HOME/android-sdk}
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          
+          # اگر cmdline-tools از قبل روی runner هست استفاده کن
+          if [ -d "$ANDROID_HOME/cmdline-tools" ]; then
+            echo "Using pre-installed Android SDK at $ANDROID_HOME"
+          else
+            mkdir -p $ANDROID_HOME/cmdline-tools
+            curl -sL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            unzip -q /tmp/cmdtools.zip -d $ANDROID_HOME/cmdline-tools
+            mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest || true
+          fi
+          
+          # پیدا کردن sdkmanager
+          SDKMANAGER=$(find $ANDROID_HOME -name sdkmanager 2>/dev/null | head -1)
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find /usr/local/lib/android -name sdkmanager 2>/dev/null | head -1)
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+          
+          yes | $SDKMANAGER --licenses >/dev/null 2>&1 || true
+          $SDKMANAGER "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || \
+          $SDKMANAGER "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "Android SDK ready"
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Create / Fix Gradle Wrapper
+        run: |
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << 'PROPS'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+PROPS
 
-      - name: Grant execute permission
-        run: chmod +x gradlew || true
+          # اگر gradlew وجود ندارد، از gradle سیستم استفاده می‌کنیم
+          if [ ! -f ./gradlew ]; then
+            echo "No gradlew found – will use system gradle"
+          else
+            chmod +x ./gradlew
+          fi
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace || echo "Build step finished"
+        run: |
+          # اول سعی با gradlew، در صورت نبودن با gradle
+          if [ -x ./gradlew ]; then
+            ./gradlew assembleDebug --stacktrace --no-daemon
+          else
+            # نصب موقت gradle اگر لازم باشد
+            if ! command -v gradle >/dev/null 2>&1; then
+              curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
+              unzip -q /tmp/gradle.zip -d /tmp
+              export PATH=/tmp/gradle-8.7/bin:$PATH
+            fi
+            gradle assembleDebug --stacktrace --no-daemon
+          fi
 
       - name: Upload APK Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AzadNet-Android-v1.0.0
@@ -48,12 +100,15 @@ jobs:
           if-no-files-found: warn
 
       - name: Create Source ZIP
+        if: always()
         run: |
           zip -r AzadNet-Source-v1.0.0.zip . \
             -x "*.git*" -x "*build*" -x "*local.properties*" \
-            -x "*.apk" -x "*artifacts*" -x "*.idea*" -x "*gradle/caches*"
+            -x "*.apk" -x "*artifacts*" -x "*.idea*" \
+            -x "*gradle/caches*" -x "*gradle/wrapper/dists*"
 
       - name: Upload Source ZIP
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: AzadNet-Source-v1.0.0
